@@ -40,15 +40,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: "1.23.9"
+          go-version: "1.27.2"
           cache: false
       - run: python -m pip install -r requirements/ci-lint.txt
       - run: ruff check .
@@ -57,7 +57,7 @@ jobs:
         run: git ls-files -z -- '*.sh' | xargs -0 -r shellcheck --severity=warning
       - name: actionlint
         run: |
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           actionlint
 
   ros:
@@ -69,16 +69,16 @@ jobs:
       matrix:
         ros: [humble, jazzy]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
           repository: ${{ env.CI_DEPENDENCY_OWNER }}/linkerbot-transport
           path: .ci/transport
           ref: ${{ env.CI_DEPENDENCY_REF }}
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
           repository: ${{ env.CI_DEPENDENCY_OWNER }}/linkerbot-hand-python-sdk
@@ -86,7 +86,7 @@ jobs:
           ref: ${{ env.CI_DEPENDENCY_REF }}
       - name: Build and test all ROS packages
         run: bash tests/docker/run.sh "${{ matrix.ros }}" "$PWD/.ci/transport" "$PWD/.ci/hand" "$PWD/reports/${{ matrix.ros }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: ros-${{ matrix.ros }}
