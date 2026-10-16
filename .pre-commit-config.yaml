@@ -1,12 +1,11 @@
-# Local gates mirroring .gitea/workflows/ci.yml.
+# Local gates mirroring .github/workflows/ci.yml.
 #
 # Install once per clone:
 #     pre-commit install
 #
 # That installs both hook types listed below, so the gates run at ``git commit``
-# and again at ``git push``. The push hook is the one that matters while the
-# Gitea runner is offline: without a runner the workflow only queues, so the
-# local push gate is the last check before code reaches the remote.
+# and again at ``git push``. Both hooks run the same Ruff checks as GitHub
+# Actions before changes reach the remote.
 #
 # ``repo: local`` with ``language: system`` deliberately calls the ruff already
 # available in this environment instead of pulling astral-sh/ruff-pre-commit.

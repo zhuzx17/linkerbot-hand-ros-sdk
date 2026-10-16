@@ -5,6 +5,8 @@
 !linkerbot_hand_ros/package.xml
 !linkerbot_hand_gui/
 !linkerbot_hand_gui/package.xml
+!requirements/
+!requirements/ci-test.txt
 !tests/
 !tests/docker/
 !tests/docker/Dockerfile
