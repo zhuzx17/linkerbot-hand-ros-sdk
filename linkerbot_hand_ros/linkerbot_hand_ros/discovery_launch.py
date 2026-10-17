@@ -2,21 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import replace
 from pathlib import Path
 
 import yaml
-from launch.actions import EmitEvent, OpaqueFunction, RegisterEventHandler
+from launch.actions import OpaqueCoroutine, RegisterEventHandler
 from launch.event_handlers import OnProcessStart
-from launch.events import matches_action
+from launch.logging import get_logger
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode, Node
-from launch_ros.event_handlers import OnStateTransition
-from launch_ros.events.lifecycle import ChangeState
 from launch_ros.parameter_descriptions import ParameterValue
+from launch_ros.ros_adapters import get_ros_node
 from launch_ros.utilities import make_namespace_absolute, prefix_namespace
 from lifecycle_msgs.msg import Transition
+from lifecycle_msgs.srv import ChangeState
 from linkerbot_hand import ValidationError
 
 from .discovery_config import (
@@ -27,6 +28,9 @@ from .discovery_config import (
     read_yaml_document,
 )
 from .discovery_deployment import SCHEMA, load_deployment
+
+_AUTOSTART_TIMEOUT_S = 30.0
+_AUTOSTART_POLL_S = 0.02
 
 
 def _value(context, name: str, default: str = "") -> str:
@@ -53,19 +57,103 @@ def _discovery_exit(event, context):
     return []
 
 
-def _activate_after_initial_configuration(context, *, driver):
-    # Consume the first configuration result even on failure. A later manual
-    # configure must not unexpectedly open the device and start polling.
-    if context.locals.event.goal_state != "inactive":
-        return []
-    return [
-        EmitEvent(
-            event=ChangeState(
-                lifecycle_node_matcher=matches_action(driver),
-                transition_id=Transition.TRANSITION_ACTIVATE,
+async def _autostart_once(context, *, driver):
+    """Configure once, activating only after its explicit successful response."""
+
+    logger = get_logger("linkerbot_hand_ros.autostart")
+    loop = context.asyncio_loop
+    # This bounds launch's observation, not a native transport call in the driver.
+    # Cancelling a request cannot undo a transition already executing remotely.
+    deadline = loop.time() + _AUTOSTART_TIMEOUT_S
+    node = None
+    client = None
+    pending = None
+    phase = "service discovery"
+
+    async def wait_until(predicate):
+        while True:
+            if context.is_shutdown or (node is not None and not node.context.ok()):
+                raise asyncio.CancelledError
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise TimeoutError
+            if predicate():
+                return
+            await asyncio.sleep(min(_AUTOSTART_POLL_S, remaining))
+
+    try:
+        if context.is_shutdown:
+            return
+        node = get_ros_node(context)
+        await wait_until(lambda: True)
+        client = node.create_client(ChangeState, f"{driver.node_name}/change_state")
+        await wait_until(client.service_is_ready)
+        for phase, identifier in (
+            ("configure", Transition.TRANSITION_CONFIGURE),
+            ("activate", Transition.TRANSITION_ACTIVATE),
+        ):
+            # Recheck shutdown and the same deadline before each non-idempotent call.
+            await wait_until(lambda: True)
+            pending = client.call_async(
+                ChangeState.Request(transition=Transition(id=identifier))
             )
+            await wait_until(
+                lambda request=pending: request.done() or request.cancelled()
+            )
+            if pending.cancelled():
+                logger.warning(
+                    f"{driver.node_name}: initial {phase} request was cancelled; "
+                    "its outcome is unknown and autostart will not continue"
+                )
+                return
+            response = pending.result()
+            client.remove_pending_request(pending)
+            pending = None
+            if not response.success:
+                logger.error(
+                    f"{driver.node_name}: initial {phase} failed; "
+                    "autostart will not continue"
+                )
+                return
+    except TimeoutError:
+        outcome = (
+            "the sent request's outcome is unknown"
+            if pending is not None
+            else "no request is awaiting confirmation"
         )
-    ]
+        logger.error(
+            f"{driver.node_name}: autostart timed out during {phase}; {outcome}; "
+            "no further automatic transition will be sent"
+        )
+    except asyncio.CancelledError:
+        logger.warning(
+            f"{driver.node_name}: autostart cancelled during {phase}; "
+            "any sent request may still execute; no further automatic transition will be sent"
+        )
+    except Exception as error:  # noqa: BLE001 - stop at the launch/ROS boundary
+        logger.error(
+            f"{driver.node_name}: autostart stopped during {phase}: {error}; "
+            "the transition result cannot be confirmed; "
+            "no further automatic transition will be sent"
+        )
+    finally:
+        if pending is not None:
+            try:
+                try:
+                    client.remove_pending_request(pending)
+                finally:
+                    pending.cancel()
+            except Exception as error:  # noqa: BLE001 - cleanup must still destroy the client
+                logger.warning(
+                    f"{driver.node_name}: could not discard autostart request: {error}"
+                )
+        if client is not None:
+            try:
+                node.destroy_client(client)
+            except Exception as error:  # noqa: BLE001 - adapter may already be shutting down
+                logger.warning(
+                    f"{driver.node_name}: could not destroy autostart client: {error}"
+                )
 
 
 def check_hand_mode(context):
@@ -121,32 +209,15 @@ def build_hand_launch(context, *, arguments):
         )
         if not _boolean(_value(context, "autostart"), "autostart"):
             return [driver]
-        # Use the same public lifecycle events on Humble and Jazzy. Register
-        # before process startup, and activate only if initial configuration succeeds.
-        # One-shot handlers never reactivate a deliberately deactivated driver.
+        # A private, bounded service sequence does not depend on initial volatile
+        # transition events. Later manual configurations cannot restart autostart.
         return [
             RegisterEventHandler(
                 OnProcessStart(
                     target_action=driver,
                     on_start=[
-                        EmitEvent(
-                            event=ChangeState(
-                                lifecycle_node_matcher=matches_action(driver),
-                                transition_id=Transition.TRANSITION_CONFIGURE,
-                            )
-                        )
-                    ],
-                    handle_once=True,
-                )
-            ),
-            RegisterEventHandler(
-                OnStateTransition(
-                    target_lifecycle_node=driver,
-                    start_state="configuring",
-                    entities=[
-                        OpaqueFunction(
-                            function=_activate_after_initial_configuration,
-                            kwargs={"driver": driver},
+                        OpaqueCoroutine(
+                            coroutine=_autostart_once, kwargs={"driver": driver}
                         )
                     ],
                     handle_once=True,

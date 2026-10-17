@@ -1,5 +1,6 @@
 """Exercise actual launch descriptions without scanning adapters or spawning nodes."""
 
+import asyncio
 import importlib.util
 import json
 from pathlib import Path
@@ -7,7 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 from launch import LaunchContext
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, OpaqueCoroutine, OpaqueFunction
+from launch.events.process import ProcessStarted
 from launch.substitutions import TextSubstitution
 from launch_ros.actions import LifecycleNode as LaunchLifecycleNode
 from launch_ros.actions import PushRosNamespace
@@ -70,17 +72,21 @@ def test_hand_manual_keeps_original_defaults_and_lifecycle_launch(actions):
     assert node.namespace.perform(context) == ""
 
 
-def test_manual_autostart_only_activates_after_initial_configuration():
-    _context, actions = _hand_launch({})
-    configure, activate, driver = actions
+def test_manual_autostart_runs_one_handshake_from_its_driver_start(monkeypatch):
+    calls = []
+
+    async def autostart_once(context, *, driver):
+        calls.append((context, driver))
+
+    monkeypatch.setattr(discovery_launch, "_autostart_once", autostart_once)
+    context, actions = _hand_launch({})
+    register, driver = actions
     assert isinstance(driver, LaunchLifecycleNode)
-    assert configure.event_handler.handle_once
-    assert activate.event_handler.handle_once
-    for start, goal, expected in (
-        ("configuring", "inactive", True),
-        ("deactivating", "inactive", False),
-        ("configuring", "unconfigured", True),
-        ("configuring", "errorprocessing", True),
+    assert register.event_handler.handle_once
+    for start, goal in (
+        ("configuring", "inactive"),
+        ("deactivating", "inactive"),
+        ("configuring", "unconfigured"),
     ):
         event = StateTransition(
             action=driver,
@@ -88,7 +94,28 @@ def test_manual_autostart_only_activates_after_initial_configuration():
                 start_state=State(label=start), goal_state=State(label=goal)
             ),
         )
-        assert activate.event_handler.matches(event) is expected
+        assert not register.event_handler.matches(event)
+
+    def started(action):
+        return ProcessStarted(
+            action=action, name="hand", cmd=["hand_node"], cwd=None, env=None, pid=1
+        )
+
+    assert not register.event_handler.matches(started(object()))
+    event = started(driver)
+    register.execute(context)
+    assert context.would_handle_event(event)
+    (coroutine,) = register.event_handler.handle(event, context)
+    assert isinstance(coroutine, OpaqueCoroutine)
+    assert not context.would_handle_event(event)
+
+    async def run():
+        context._set_asyncio_loop(asyncio.get_running_loop())
+        coroutine.execute(context)
+        await coroutine.get_asyncio_future()
+
+    asyncio.run(run())
+    assert calls == [(context, driver)]
 
 
 def test_manual_autostart_false_creates_no_transition_handlers():
