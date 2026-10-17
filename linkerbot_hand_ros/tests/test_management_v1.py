@@ -116,6 +116,10 @@ def test_o6_save_parameters_service_tracks_acknowledged_operation(monkeypatch):
         assert result.successful
         node.trigger_configure()
         node.trigger_activate()
+        # This test publishes status manually; drain the periodic publisher
+        # before submission so it cannot consume the completed operation first.
+        node._interfaces._status_worker.stop(1.0)
+        assert not node._interfaces._status_worker.active
 
         response = node._interfaces.management._submit_discrete(
             DiscreteOperation.SAVE_PARAMETERS,

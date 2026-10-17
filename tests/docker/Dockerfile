@@ -17,9 +17,10 @@ RUN rosdep update --rosdistro "${ROS_DISTRO}" \
       --rosdistro "${ROS_DISTRO}" \
     && rm -rf /var/lib/apt/lists/*
 
+COPY requirements/ci-test.txt /tmp/ci-test.txt
 RUN python3 -m venv --system-site-packages /venv \
     && /venv/bin/python -m pip install --upgrade pip \
-    && /venv/bin/python -m pip install --upgrade pytest
+    && /venv/bin/python -m pip install -r /tmp/ci-test.txt
 
 COPY tests/docker/verify.sh /usr/local/bin/verify-hand-ros
 ENTRYPOINT ["/bin/bash", "/usr/local/bin/verify-hand-ros"]

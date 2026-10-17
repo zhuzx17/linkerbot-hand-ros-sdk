@@ -3,5 +3,6 @@ testpaths = ["linkerbot_hand_ros/tests"]
 pythonpath = ["linkerbot_hand_ros"]
 
 [tool.ruff]
+extend-exclude = ["*.md"]
 line-length = 88
 target-version = "py310"

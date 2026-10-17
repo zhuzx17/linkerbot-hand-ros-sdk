@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      dependency_owner:
+        description: GitHub owner of dependency repositories
+        type: string
+        default: linker-bot
+      dependency_ref:
+        description: Dependency branch, tag or commit (empty uses normal defaults)
+        type: string
+        default: ""
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CI_DEPENDENCY_OWNER: ${{ inputs.dependency_owner || vars.CI_DEPENDENCY_OWNER || 'linker-bot' }}
+  CI_DEPENDENCY_REF: ${{ inputs.dependency_ref || vars.CI_DEPENDENCY_REF || 'main' }}
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.2"
+          cache: false
+      - run: python -m pip install -r requirements/ci-lint.txt
+      - run: ruff check .
+      - run: ruff format --check .
+      - name: ShellCheck
+        run: git ls-files -z -- '*.sh' | xargs -0 -r shellcheck --severity=warning
+      - name: actionlint
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          actionlint
+
+  ros:
+    name: ROS (${{ matrix.ros }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        ros: [humble, jazzy]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          repository: ${{ env.CI_DEPENDENCY_OWNER }}/linkerbot-transport
+          path: .ci/transport
+          ref: ${{ env.CI_DEPENDENCY_REF }}
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          repository: ${{ env.CI_DEPENDENCY_OWNER }}/linkerbot-hand-python-sdk
+          path: .ci/hand
+          ref: ${{ env.CI_DEPENDENCY_REF }}
+      - name: Build and test all ROS packages
+        run: bash tests/docker/run.sh "${{ matrix.ros }}" "$PWD/.ci/transport" "$PWD/.ci/hand" "$PWD/reports/${{ matrix.ros }}"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ros-${{ matrix.ros }}
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14
