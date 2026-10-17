@@ -7,3 +7,9 @@ build/
 dist/
 install/
 log/
+
+# Local CI reports
+/reports/
+/tests/docker/results/
+.coverage
+.coverage.*

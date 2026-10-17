@@ -79,6 +79,18 @@ def node_rig():
         rclpy.try_shutdown()
 
 
+@pytest.fixture
+def manual_status_node_rig(node_rig):
+    node, _builder = node_rig
+    node.trigger_configure()
+    node.trigger_activate()
+    # These tests step publication themselves. Join the real worker before any
+    # command or publisher replacement so it cannot consume the same updates.
+    node._interfaces._status_worker.stop(1.0)
+    assert not node._interfaces._status_worker.active
+    return node_rig
+
+
 @pytest.mark.parametrize("capacity", (0, 513, True))
 def test_command_tracking_capacity_matches_bounded_status_batch(
     node_rig,
@@ -334,6 +346,9 @@ def test_cached_state_publishes_new_sequence_once_without_active_read(node_rig):
     node, builder = node_rig
     node.trigger_configure()
     node.trigger_activate()
+    # Keep the manually stepped cache publication independent of its worker.
+    node._interfaces._state_worker.stop(1.0)
+    assert not node._interfaces._state_worker.active
     runtime = builder.latest_runtime
     metadata = SampleMeta(
         sequence=1,
@@ -419,10 +434,8 @@ def test_cache_worker_refreshes_sample_ages_after_idle_timeout(node_rig):
     assert runtime.snapshot_get_count == gets_before + 1
 
 
-def test_command_callback_routes_raw_angles_without_waiting(node_rig):
-    node, builder = node_rig
-    node.trigger_configure()
-    node.trigger_activate()
+def test_command_callback_routes_raw_angles_without_waiting(manual_status_node_rig):
+    node, builder = manual_status_node_rig
     runtime = builder.latest_runtime
     command = runtime.capabilities.command(CommandSemantic.ANGLES)
     assert command is not None
@@ -467,10 +480,10 @@ def test_command_callback_routes_raw_angles_without_waiting(node_rig):
     assert commands.tracked_count == 0
 
 
-def test_status_publication_failure_does_not_reclassify_accepted_command(node_rig):
-    node, builder = node_rig
-    node.trigger_configure()
-    node.trigger_activate()
+def test_status_publication_failure_does_not_reclassify_accepted_command(
+    manual_status_node_rig,
+):
+    node, builder = manual_status_node_rig
     runtime = builder.latest_runtime
     commands = node._interfaces.commands
     original = commands._status_publisher
@@ -503,10 +516,10 @@ def test_status_publication_failure_does_not_reclassify_accepted_command(node_ri
         commands._status_publisher = original
 
 
-def test_status_publication_does_not_hold_command_tracking_lock(node_rig):
-    node, _builder = node_rig
-    node.trigger_configure()
-    node.trigger_activate()
+def test_status_publication_does_not_hold_command_tracking_lock(
+    manual_status_node_rig,
+):
+    node, _builder = manual_status_node_rig
     commands = node._interfaces.commands
     original = commands._status_publisher
     publisher = LockProbePublisher(commands._lock)
@@ -529,10 +542,8 @@ def test_status_publication_does_not_hold_command_tracking_lock(node_rig):
     assert len(publisher.messages) == 1
 
 
-def test_changed_command_statuses_share_one_dds_publication(node_rig):
-    node, _builder = node_rig
-    node.trigger_configure()
-    node.trigger_activate()
+def test_changed_command_statuses_share_one_dds_publication(manual_status_node_rig):
+    node, _builder = manual_status_node_rig
     commands = node._interfaces.commands
     original = commands._status_publisher
     publisher = FakePublisher()
@@ -559,10 +570,10 @@ def test_changed_command_statuses_share_one_dds_publication(node_rig):
     ]
 
 
-def test_command_deactivate_waits_for_inflight_status_publication(node_rig):
-    node, _builder = node_rig
-    node.trigger_configure()
-    node.trigger_activate()
+def test_command_deactivate_waits_for_inflight_status_publication(
+    manual_status_node_rig,
+):
+    node, _builder = manual_status_node_rig
     commands = node._interfaces.commands
     original = commands._status_publisher
     publisher = BlockingPublisher()
