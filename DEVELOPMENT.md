@@ -13,11 +13,13 @@ source "/opt/ros/${LINKERBOT_ROS_DISTRO}/setup.bash"
 source "$HOME/venvs/linkerbot-hand-${ROS_DISTRO}/bin/activate"
 source "$HOME/linkerbot_${ROS_DISTRO}_ws/install/setup.bash"
 cd "$HOME/linkerbot_${ROS_DISTRO}_ws/src/linkerbot-hand-ros"
-python -m pip install pytest ruff
+python -m pip install -r requirements/ci-lint.txt -r requirements/ci-test.txt
 export ROS_DOMAIN_ID=87
 export ROS_LOCALHOST_ONLY=1
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q \
-  linkerbot_hand_ros/tests linkerbot_hand_gui/test linkerbot_hand_msgs/test
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q -p pytest_timeout -p pytest_cov.plugin \
+  linkerbot_hand_ros/tests linkerbot_hand_gui/test linkerbot_hand_msgs/test \
+  --timeout=60 --cov=linkerbot_hand_ros --cov=linkerbot_hand_gui \
+  --cov-report=xml:reports/coverage.xml --junitxml=reports/pytest.xml
 ruff check .
 ruff format --check .
 ```
@@ -50,6 +52,9 @@ bash tests/docker/run.sh jazzy \
 环境中安装指定的 SDK 源码、编译消息包/驱动/GUI，并运行三个包的测试。
 源码以只读方式挂载，构建发生在容器内；容器退出后自动删除。脚本使用传入目录的
 当前内容，不自动更新依赖，测试前应确认其分支及提交。
+默认结果位于 `tests/docker/results/<发行版>/`，第四个参数可指定结果目录。
+保存源码提交与修改状态、构建/测试日志、colcon 日志、JUnit 和覆盖率 XML；失败返回非零。
+构建同时检查三个 ROS 包安装目录中的许可证文件。
 测试容器使用本机发现，默认域号 87；可在运行前设置 `ROS_DOMAIN_ID` 更换基础域号，
 同样会检查是否已有其他 ROS 节点。
 
@@ -65,3 +70,24 @@ Python 进程中创建 ROS context，并继承选定的测试域，避免整套�
 `NO_PROXY` 环境变量；Linux 上若代理只监听宿主 localhost，可设置
 `ROS_TEST_BUILD_NETWORK=host`，仅让镜像构建使用宿主网络，测试容器仍使用独立网络。
 测试不连接硬件或打开 GUI 图形窗口，不能代替实机与模型预览验证。
+
+## GitHub CI
+
+PR、`main` 更新、每周及手动运行执行 Ruff lint/format、ShellCheck、actionlint，
+并分别在 Humble 和 Jazzy Docker 环境中构建三个包、运行离线测试。依赖使用 GitHub
+上 Transport 和 Hand Python SDK 的 `main`，无需 Gitea 访问或设备凭据。
+测试工具版本固定在 `requirements/ci-*.txt`，显式加载超时和覆盖率插件。
+覆盖率先记录基线，不设置最低阈值；`reports/` 结果作为 Actions artifacts 保留 14 天。
+默认未提供 GUI 外部模型资源时跳过对应测试，CI 不执行发布、实机动作或图形窗口验证。
+
+## 在个人 fork 验证 CI
+
+Actions 的手动运行入口支持 `dependency_owner` 和 `dependency_ref`：默认仍使用
+`linker-bot` 依赖，以及原有的 main/配对提交规则。跨仓库改动可先将 Transport、
+Hand/Arm Python SDK 和两个 ROS 仓库推送到个人 fork 的同名测试分支，再统一指定
+个人账号与该分支，避免混用上游尚未更新的测试脚本。日志记录实际使用的源码提交。
+
+新 fork 的工作流需要启用 Actions，且默认分支上需要包含工作流文件，才能手动运行；
+可以仅将个人 fork 的默认分支设为测试分支。上游默认分支不受影响。
+
+手动运行同时验证 Humble 与 Jazzy。
