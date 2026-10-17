@@ -10,6 +10,11 @@
 Launch defaults to `autostart:=true`. Manual single-hand launch (`discover:=false`)
 automatically configures and activates only at startup. After an initial failure or
 cleanup, a subsequent configure stays inactive until an explicit activate.
+Activation requires a successful response to that startup's configure request;
+transition events alone do not authorize it. Startup waits up to 30 seconds in
+total for service discovery and both responses. A failure or unconfirmed result
+ends automatic startup without resending transitions. A timed-out request may
+still execute: check the lifecycle state before managing it manually.
 For external management:
 
 ```bash

@@ -101,7 +101,7 @@ def test_launch_exposes_every_driver_parameter() -> None:
     assert 'DeclareLaunchArgument("autostart"' in source
 
 
-def test_launch_uses_portable_lifecycle_events_for_autostart() -> None:
+def test_launch_does_not_require_distribution_specific_autostart_argument() -> None:
     source = (PACKAGE_ROOT / "linkerbot_hand_ros/discovery_launch.py").read_text(
         encoding="utf-8"
     )
@@ -118,8 +118,6 @@ def test_launch_uses_portable_lifecycle_events_for_autostart() -> None:
     assert not any(
         keyword.arg == "autostart" for keyword in lifecycle_nodes[0].keywords
     )
-    assert "OnProcessStart" in source
-    assert "OnStateTransition" in source
 
 
 def test_multi_hand_launch_preserves_each_internal_node_name() -> None:
