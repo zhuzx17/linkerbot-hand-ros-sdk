@@ -9,7 +9,10 @@
 
 launch 默认 `autostart:=true`。手工单手启动（`discover:=false`）仅在启动时自动
 configure/activate；首次启动失败或 cleanup 后，再次 configure 会保持 inactive，
-需要显式 activate。外部管理时先启动：
+需要显式 activate。自动激活必须收到本次 configure 请求的成功响应，不能仅凭状态
+事件触发。服务发现及两次响应的总等待上限为 30 秒；失败或结果无法确认时结束
+该次自动启动，不重发转换请求。超时不代表服务端未执行，请先检查生命周期状态，
+再进行人工管理。外部管理时先启动：
 
 ```bash
 ros2 launch linkerbot_hand_ros hand.launch.py autostart:=false
